@@ -173,7 +173,50 @@
         .leg-item { display: flex; align-items: center; gap: 5px; }
         .cor-dot { width: 9px; height: 9px; border-radius: 50%; }
 
+       .filtros-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .btn-menu-mobile {
+            display: none;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            font-size: 20px;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
         @media (max-width: 768px) {
+            .top-hud { padding: 10px 14px; gap: 8px; }
+            .brand h1 { font-size: 14px; }
+            .brand span { display: none; }
+            .stats-badge { font-size: 11px; padding: 5px 10px; }
+            .btn-menu-mobile { display: flex; }
+
+            .filtros-wrapper {
+                display: none;
+                width: 100%;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                margin-top: 6px;
+                padding-top: 10px;
+                border-top: 1px solid var(--border-panel);
+            }
+            .filtros-wrapper.aberto { display: flex; }
+
+            .control-group { width: 100%; justify-content: space-between; }
+            .control-group input[type="text"] { width: 65%; text-align: right; }
+            .btn-mapa { width: 100%; padding: 8px; text-align: center; }
+
             .lista-voos { display: none; }
             .detalhe-card { left: 14px; right: 14px; width: auto; top: auto; bottom: 20px; }
             .legenda { display: none; }
@@ -220,22 +263,28 @@
         </div>
     </div>
 
-    <label class="control-group" style="cursor:pointer;">
-        <input type="checkbox" id="filtro-ar" onchange="atualizarMapa()">
-        Apenas no ar
-    </label>
-
-    <div class="control-group">
-        <span>Destino:</span>
-        <input type="text" id="filtro-destino" placeholder="Ex: LPPR, MMMX" onkeyup="atualizarMapa()">
-    </div>
-
-    <div class="control-group">
-        <span>Pesquisa:</span>
-        <input type="text" id="filtro-texto" placeholder="Voo, modelo, companhia" onkeyup="atualizarMapa()">
-    </div>
-
     <div class="stats-badge" id="contador">A sincronizar...</div>
+
+    <button class="btn-menu-mobile" id="btn-menu-mobile" onclick="toggleFiltrosMobile()" aria-label="Abrir filtros">☰</button>
+
+    <div class="filtros-wrapper" id="filtros-wrapper">
+        <label class="control-group" style="cursor:pointer;">
+            <span>Apenas no ar</span>
+            <input type="checkbox" id="filtro-ar" onchange="atualizarMapa()">
+        </label>
+
+        <div class="control-group">
+            <span>Destino:</span>
+            <input type="text" id="filtro-destino" placeholder="Ex: LPPR, MMMX" onkeyup="atualizarMapa()">
+        </div>
+
+        <div class="control-group">
+            <span>Pesquisa:</span>
+            <input type="text" id="filtro-texto" placeholder="Voo, modelo, companhia" onkeyup="atualizarMapa()">
+        </div>
+
+        <button class="btn-mapa" onclick="alternarTemaMapa()" id="btn-tema">Mapa Escuro (Radar)</button>
+    </div>
 </div>
 
 <!-- Lista lateral de aeronaves -->
@@ -343,6 +392,13 @@
             btn.innerText = "Mapa Claro (OSM)";
         }
         modoEscuro = !modoEscuro;
+    }
+
+    function toggleFiltrosMobile() {
+        const menu = document.getElementById('filtros-wrapper');
+        const btn = document.getElementById('btn-menu-mobile');
+        menu.classList.toggle('aberto');
+        btn.innerHTML = menu.classList.contains('aberto') ? '×' : '☰';
     }
 
     // Marcador discreto do Aeroporto do Porto / Zona do Recetor
