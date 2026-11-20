@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MaiaFlightRadar</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root {
+            --bg-panel: rgba(15, 23, 42, 0.88);
+            --border-panel: rgba(148, 163, 184, 0.2);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-amber: #f59e0b;
+        }
+
+        * { box-sizing: border-box; }
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0b1120; color: var(--text-main); overflow: hidden;
+        }
+
+        #mapa { width: 100%; height: 100%; z-index: 1; }
+
+        /* Barra Superior Flutuante */
+        .top-hud {
+            position: absolute; top: 14px; left: 14px; right: 14px; z-index: 1000;
+            background: var(--bg-panel);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-panel);
+            border-radius: 14px;
+            padding: 10px 18px;
+            display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.45);
+        }
+
+        .brand {
+            display: flex; align-items: center; gap: 10px; margin-right: 8px;
+        }
+        .pulse-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .brand h1 { font-size: 16px; margin: 0; letter-spacing: 0.4px; font-weight: 700; }
+        .brand span { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+
+        .control-group {
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(30, 41, 59, 0.75);
+            padding: 6px 12px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.06);
+            font-size: 13px;
+        }
+        .control-group input[type="text"] {
+            background: transparent; border: none; color: white; outline: none; width: 135px; font-size: 13px;
+        }
+        .control-group input[type="text"]::placeholder { color: #64748b; }
+        .control-group input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+
+        .btn-mapa {
+            background: rgba(56, 189, 248, 0.15); color: var(--accent);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            padding: 6px 12px; border-radius: 8px; cursor: pointer;
+            font-size: 12px; font-weight: 600; transition: 0.2s;
+        }
+        .btn-mapa:hover { background: rgba(56, 189, 248, 0.28); }
+
+        .stats-badge {
+            margin-left: auto;
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #34d399;
+            padding: 6px 12px; border-radius: 20px;
+            font-size: 13px; font-weight: 600;
+        }
+
+        /* Lista Lateral Esquerda de Voos */
+        .lista-voos {
+            position: absolute; top: 82px; left: 14px; bottom: 24px; width: 260px; z-index: 999;
+            background: var(--bg-panel); backdrop-filter: blur(12px);
+            border: 1px solid var(--border-panel); border-radius: 14px;
+            display: flex; flex-direction: column; overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+        }
+        .lista-header {
+            padding: 12px 14px; font-size: 12px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted);
+            border-bottom: 1px solid var(--border-panel);
+        }
+        .lista-items { overflow-y: auto; flex: 1; }
+        .voo-item {
+            padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.04);
+            cursor: pointer; transition: background 0.15s;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .voo-item:hover, .voo-item.ativo { background: rgba(56, 189, 248, 0.14); }
+        .voo-item-main { font-weight: 700; font-size: 14px; color: #fff; }
+        .voo-item-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+        .voo-item-alt { font-size: 12px; font-weight: 600; color: var(--accent-amber); text-align: right; }
+
+        /* Cartão de Detalhes do Avião (Direita) */
+        .detalhe-card {
+            position: absolute; top: 82px; right: 14px; width: 320px; z-index: 1000;
+            background: var(--bg-panel); backdrop-filter: blur(14px);
+            border: 1px solid var(--border-panel); border-radius: 16px;
+            padding: 18px; box-shadow: 0 14px 32px rgba(0,0,0,0.55);
+            display: none; animation: slideIn 0.2s ease-out;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(15px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .card-top {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 1px solid var(--border-panel); padding-bottom: 12px;
+        }
+        .card-callsign { font-size: 22px; font-weight: 800; color: var(--accent); margin: 0; }
+        .card-airline { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+        .btn-fechar {
+            background: rgba(255,255,255,0.08); border: none; color: #fff;
+            width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 16px;
+        }
+        .btn-fechar:hover { background: rgba(239, 68, 68, 0.4); }
+
+        .rota-box {
+            display: flex; align-items: center; justify-content: space-between;
+            background: rgba(30, 41, 59, 0.8); border-radius: 10px;
+            padding: 12px 16px; margin: 14px 0;
+        }
+        .aeroporto { text-align: center; }
+        .aeroporto-code { font-size: 18px; font-weight: 800; letter-spacing: 1px; }
+        .aeroporto-lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+        .rota-aviao { color: var(--accent-amber); font-size: 18px; }
+
+        .grid-dados {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px;
+        }
+        .dado-box {
+            background: rgba(255,255,255,0.03); padding: 9px 11px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .dado-lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+        .dado-val { font-size: 14px; font-weight: 700; margin-top: 3px; }
+
+        /* Etiqueta de texto nos aviões */
+        .plane-label {
+            background: rgba(15, 23, 42, 0.82); color: #f8fafc;
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 700;
+            box-shadow: none;
+        }
+        .plane-label::before { display: none; }
+
+        /* Legenda de Altitude */
+        .legenda {
+            position: absolute; bottom: 24px; right: 14px; z-index: 999;
+            background: var(--bg-panel); backdrop-filter: blur(10px);
+            border: 1px solid var(--border-panel); border-radius: 10px;
+            padding: 8px 14px; font-size: 11px; display: flex; gap: 12px;
+        }
+        .leg-item { display: flex; align-items: center; gap: 5px; }
+        .cor-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+        @media (max-width: 768px) {
+            .lista-voos { display: none; }
+            .detalhe-card { left: 14px; right: 14px; width: auto; top: auto; bottom: 20px; }
+            .legenda { display: none; }
+        }
+
+        /* Fotografia no topo do cartão (estilo FlightRadar24) */
+        .foto-container {
+            position: relative;
+            margin: -18px -18px 14px -18px;
+            height: 165px;
+            border-radius: 16px 16px 0 0;
+            overflow: hidden;
+            background: #1e293b;
+            border-bottom: 1px solid var(--border-panel);
+        }
+        .foto-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .foto-credito {
+            position: absolute;
+            bottom: 6px;
+            right: 8px;
+            background: rgba(15, 23, 42, 0.78);
+            color: #cbd5e1;
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-decoration: none;
+        }
+        .foto-credito:hover { color: #38bdf8; }
+    </style>
+</head>
+<body>
+
+<div class="top-hud">
+    <div class="brand">
+        <div class="pulse-dot"></div>
+        <div>
+            <h1>STAER RADAR</h1>
+            <span>Modo S • ADS-B Live</span>
+        </div>
+    </div>
+
+    <label class="control-group" style="cursor:pointer;">
+        <input type="checkbox" id="filtro-ar" onchange="atualizarMapa()">
+        Apenas no ar
+    </label>
+
+    <div class="control-group">
+        <span>Destino:</span>
+        <input type="text" id="filtro-destino" placeholder="Ex: LPPR, MMMX" onkeyup="atualizarMapa()">
+    </div>
+
+    <div class="control-group">
+        <span>Pesquisa:</span>
+        <input type="text" id="filtro-texto" placeholder="Voo, modelo, companhia" onkeyup="atualizarMapa()">
+    </div>
+
+    <button class="btn-mapa" onclick="alternarTemaMapa()" id="btn-tema">Mapa Claro (OSM)</button>
+
+    <div class="stats-badge" id="contador">A sincronizar...</div>
+</div>
+
+<!-- Lista lateral de aeronaves -->
+<div class="lista-voos">
+    <div class="lista-header">Tráfego Detetado</div>
+    <div class="lista-items" id="lista-items"></div>
+</div>
+
+<!-- Painel de Detalhes -->
+<div class="detalhe-card" id="detalhe-card">
+    <div class="foto-container" id="foto-container" style="display: none;">
+        <img id="det-foto" src="" alt="Fotografia da aeronave" onerror="document.getElementById('foto-container').style.display='none'">
+        <a class="foto-credito" id="det-foto-credito" href="#" target="_blank" rel="noopener"></a>
+    </div>
+    <div class="card-top">
+        <div>
+            <h2 class="card-callsign" id="det-voo">---</h2>
+            <div class="card-airline" id="det-companhia">Companhia desconhecida</div>
+        </div>
+        <button class="btn-fechar" onclick="fecharDetalhes()">×</button>
+    </div>
+
+    <div class="rota-box">
+        <div class="aeroporto">
+            <div class="aeroporto-code" id="det-origem">---</div>
+            <div class="aeroporto-lbl">Origem</div>
+        </div>
+        <div class="rota-aviao">✈</div>
+        <div class="aeroporto">
+            <div class="aeroporto-code" id="det-destino">---</div>
+            <div class="aeroporto-lbl">Destino</div>
+        </div>
+    </div>
+
+    <div class="grid-dados">
+        <div class="dado-box">
+            <div class="dado-lbl">Aeronave</div>
+            <div class="dado-val" id="det-modelo">---</div>
+        </div>
+        <div class="dado-box">
+            <div class="dado-lbl">Matrícula / ICAO</div>
+            <div class="dado-val" id="det-matricula">---</div>
+        </div>
+        <div class="dado-box">
+            <div class="dado-lbl">Altitude</div>
+            <div class="dado-val" id="det-altitude">---</div>
+        </div>
+        <div class="dado-box">
+            <div class="dado-lbl">Velocidade</div>
+            <div class="dado-val" id="det-velocidade">---</div>
+        </div>
+        <div class="dado-box">
+            <div class="dado-lbl">Rumo (Track)</div>
+            <div class="dado-val" id="det-rumo">---</div>
+        </div>
+        <div class="dado-box">
+            <div class="dado-lbl">Sinal RF (RSSI)</div>
+            <div class="dado-val" id="det-rssi">---</div>
+        </div>
+    </div>
+</div>
+
+<!-- Legenda -->
+<div class="legenda">
+    <div class="leg-item"><span class="cor-dot" style="background:#94a3b8;"></span> Solo</div>
+    <div class="leg-item"><span class="cor-dot" style="background:#38bdf8;"></span> < 10.000 ft</div>
+    <div class="leg-item"><span class="cor-dot" style="background:#10b981;"></span> 10k–25k ft</div>
+    <div class="leg-item"><span class="cor-dot" style="background:#f59e0b;"></span> > 25.000 ft</div>
+</div>
+
+<div id="mapa"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const CARTO_API_KEY = "cb1_5cmh_1_0130da515cd0e61d526a8ed2";
+
+    const mapa = L.map('mapa', { zoomControl: false }).setView([41.2481, -8.6814], 8);
+    L.control.zoom({ position: 'bottomright' }).addTo(mapa);
+
+    const camadaEscura = L.tileLayer(
+        `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${CARTO_API_KEY}`,
+        {
+            attribution: '© OpenStreetMap © CARTO',
+            maxZoom: 19
+        }
+    );
+
+    const camadaClara = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19
+    });
+
+    let modoEscuro = true;
+    camadaEscura.addTo(mapa);
+
+    function alternarTemaMapa() {
+        const btn = document.getElementById('btn-tema');
+        if (modoEscuro) {
+            mapa.removeLayer(camadaEscura);
+            camadaClara.addTo(mapa);
+            btn.innerText = "Mapa Escuro (Radar)";
+        } else {
+            mapa.removeLayer(camadaClara);
+            camadaEscura.addTo(mapa);
+            btn.innerText = "Mapa Claro (OSM)";
+        }
+        modoEscuro = !modoEscuro;
+    }
+
+    // Marcador discreto do Aeroporto do Porto / Zona do Recetor
+    L.circle([41.2481, -8.6814], {
+        radius: 2500, color: '#38bdf8', weight: 1, fillOpacity: 0.08, dashArray: '4, 6'
+    }).addTo(mapa).bindTooltip("Aeroporto Francisco Sá Carneiro (LPPR)");
+
+    let marcadores = {};
+    let dadosAtuais = [];
+    let hexSelecionado = null;
+    let linhaRasto = null;
+
+    function corPorAltitude(alt, emSolo, selecionado) {
+        if (selecionado) return '#ec4899';
+        if (emSolo) return '#94a3b8';
+        const num = parseInt(alt, 10);
+        if (isNaN(num) || num < 10000) return '#38bdf8';
+        if (num < 25000) return '#10b981';
+        return '#f59e0b';
+    }
+
+    function criarIconeAviao(rumo, cor, selecionado) {
+        const angulo = rumo || 0;
+        const escala = selecionado ? 1.25 : 1.0;
+        const sombra = selecionado ? 'drop-shadow(0 0 8px rgba(236,72,153,0.9))' : 'drop-shadow(0 2px 4px rgba(0,0,0,0.7))';
+        return L.divIcon({
+            className: '',
+            iconSize: [28, 28],
+            iconAnchor: [14, 14],
+            html: `
+                <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+                            transform: rotate(${angulo}deg) scale(${escala}); filter:${sombra}; transition: transform 0.3s;">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="${cor}" stroke="#0f172a" stroke-width="1">
+                        <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
+                    </svg>
+                </div>
+            `
+        });
+    }
+
+    const cacheFotos = {};
+
+    async function carregarFotoAviao(hex, matricula) {
+        const container = document.getElementById('foto-container');
+        const img = document.getElementById('det-foto');
+        const credito = document.getElementById('det-foto-credito');
+
+        // Esconde enquanto procura a nova foto
+        container.style.display = 'none';
+
+        // Se já pesquisámos este avião antes, usa a cache
+        if (hex in cacheFotos) {
+            const info = cacheFotos[hex];
+            if (info) {
+                img.src = info.url;
+                credito.innerText = `© ${info.autor}`;
+                credito.href = info.link;
+                container.style.display = 'block';
+            }
+            return;
+        }
+
+        try {
+            // 1. Tenta pesquisar pelo código ICAO (hex)
+            let resp = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex.toLowerCase()}`);
+            let dados = await resp.json();
+
+            // 2. Se não encontrar e houver matrícula válida, tenta pela matrícula
+            if ((!dados.photos || dados.photos.length === 0) && matricula && matricula !== 'N/A' && matricula !== 'Desconhecida') {
+                resp = await fetch(`https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(matricula)}`);
+                dados = await resp.json();
+            }
+
+            if (dados.photos && dados.photos.length > 0) {
+                const foto = dados.photos[0];
+                const info = {
+                    url: (foto.thumbnail_large && foto.thumbnail_large.src) || foto.thumbnail.src,
+                    autor: foto.photographer || 'Planespotters.net',
+                    link: foto.link || 'https://www.planespotters.net'
+                };
+                cacheFotos[hex] = info;
+
+                // Só mostra se o utilizador ainda tiver este avião selecionado
+                if (hexSelecionado === hex) {
+                    img.src = info.url;
+                    credito.innerText = `© ${info.autor}`;
+                    credito.href = info.link;
+                    container.style.display = 'block';
+                }
+            } else {
+                cacheFotos[hex] = null; // Marca como sem foto para não repetir pedidos
+            }
+        } catch (e) {
+            console.warn('Não foi possível carregar fotografia:', e);
+        }
+    }
+
+    async function selecionarAviao(aviao, centrar = false) {
+        hexSelecionado = aviao.hex;
+        carregarFotoAviao(aviao.hex, aviao.matricula);
+        document.getElementById('detalhe-card').style.display = 'block';
+        document.getElementById('det-voo').innerText = aviao.voo || aviao.matricula || aviao.hex.toUpperCase();
+        document.getElementById('det-companhia').innerText = aviao.companhia || 'Operador desconhecido';
+        document.getElementById('det-origem').innerText = (aviao.origem && aviao.origem !== 'N/A') ? aviao.origem : '---';
+        document.getElementById('det-destino').innerText = (aviao.destino && aviao.destino !== 'N/A') ? aviao.destino : '---';
+        document.getElementById('det-modelo').innerText = aviao.modelo || 'Desconhecido';
+        document.getElementById('det-matricula').innerText = `${aviao.matricula || 'N/A'} (${aviao.hex.toUpperCase()})`;
+        document.getElementById('det-altitude').innerText = aviao.altitude === 'ground' ? 'Em solo' : `${aviao.altitude} ft`;
+        document.getElementById('det-velocidade').innerText = aviao.velocidade ? `${Math.round(aviao.velocidade)} kt` : 'N/A';
+        document.getElementById('det-rumo').innerText = aviao.rumo !== null ? `${Math.round(aviao.rumo)}°` : 'N/A';
+        document.getElementById('det-rssi').innerText = aviao.rssi !== null ? `${aviao.rssi} dBFS` : 'N/A';
+
+        if (centrar) {
+            mapa.flyTo([aviao.lat, aviao.lon], Math.max(mapa.getZoom(), 10), { duration: 0.7 });
+        }
+
+        // Desenhar rasto histórico
+        try {
+            const resp = await fetch(`/api/rasto?hex=${aviao.hex}`);
+            const rasto = await resp.json();
+            if (linhaRasto) mapa.removeLayer(linhaRasto);
+            if (rasto.pontos && rasto.pontos.length > 1) {
+                linhaRasto = L.polyline(rasto.pontos, {
+                    color: '#ec4899', weight: 3, opacity: 0.85, dashArray: '6, 4'
+                }).addTo(mapa);
+            }
+        } catch (e) {}
+
+        atualizarMapa();
+    }
+
+    function fecharDetalhes() {
+        hexSelecionado = null;
+        document.getElementById('detalhe-card').style.display = 'none';
+        if (linhaRasto) {
+            mapa.removeLayer(linhaRasto);
+            linhaRasto = null;
+        }
+        atualizarMapa();
+    }
+
+    function atualizarMapa() {
+        const apenasNoAr = document.getElementById('filtro-ar').checked;
+        const destinoFiltro = document.getElementById('filtro-destino').value.trim().toUpperCase();
+        const textoFiltro = document.getElementById('filtro-texto').value.trim().toLowerCase();
+
+        Object.values(marcadores).forEach(m => mapa.removeLayer(m));
+        marcadores = {};
+
+        const listaContainer = document.getElementById('lista-items');
+        listaContainer.innerHTML = '';
+        let visiveis = 0;
+
+        dadosAtuais.forEach(aviao => {
+            const emSolo = (aviao.altitude === 'ground' || aviao.altitude === '0' || aviao.altitude === '');
+
+            if (apenasNoAr && emSolo) return;
+            if (destinoFiltro && (!aviao.destino || !aviao.destino.toUpperCase().includes(destinoFiltro))) return;
+            if (textoFiltro) {
+                const info = `${aviao.hex} ${aviao.voo} ${aviao.matricula} ${aviao.modelo} ${aviao.companhia}`.toLowerCase();
+                if (!info.includes(textoFiltro)) return;
+            }
+
+            visiveis++;
+            const selecionado = (aviao.hex === hexSelecionado);
+            const cor = corPorAltitude(aviao.altitude, emSolo, selecionado);
+            const titulo = aviao.voo || aviao.matricula || aviao.hex.toUpperCase();
+
+            const marker = L.marker([aviao.lat, aviao.lon], {
+                icon: criarIconeAviao(aviao.rumo, cor, selecionado)
+            }).addTo(mapa);
+
+            marker.bindTooltip(titulo, {
+                permanent: true, direction: 'right', offset: [10, 0], className: 'plane-label'
+            });
+
+            marker.on('click', () => selecionarAviao(aviao, false));
+            marcadores[aviao.hex] = marker;
+
+            // Adicionar à lista lateral
+            const item = document.createElement('div');
+            item.className = `voo-item ${selecionado ? 'ativo' : ''}`;
+            const rotaTexto = (aviao.origem && aviao.origem !== 'N/A') ? `${aviao.origem} ➔ ${aviao.destino}` : (aviao.modelo || aviao.hex.toUpperCase());
+            item.innerHTML = `
+                <div>
+                    <div class="voo-item-main">${titulo}</div>
+                    <div class="voo-item-sub">${rotaTexto}</div>
+                </div>
+                <div class="voo-item-alt">${emSolo ? 'SOLO' : aviao.altitude + ' ft'}</div>
+            `;
+            item.onclick = () => selecionarAviao(aviao, true);
+            listaContainer.appendChild(item);
+
+            // Se este avião estiver selecionado, atualizar os valores ao vivo no cartão
+            if (selecionado) {
+                document.getElementById('det-altitude').innerText = emSolo ? 'Em solo' : `${aviao.altitude} ft`;
+                document.getElementById('det-velocidade').innerText = aviao.velocidade ? `${Math.round(aviao.velocidade)} kt` : 'N/A';
+                document.getElementById('det-rumo').innerText = aviao.rumo !== null ? `${Math.round(aviao.rumo)}°` : 'N/A';
+                document.getElementById('det-rssi').innerText = aviao.rssi !== null ? `${aviao.rssi} dBFS` : 'N/A';
+            }
+        });
+
+        document.getElementById('contador').innerText = `${visiveis} aeronaves ativas`;
+    }
+
+    async function carregarDados() {
+        try {
+            const resp = await fetch('/api/avioes');
+            dadosAtuais = await resp.json();
+            atualizarMapa();
+        } catch (e) {
+            console.error('Erro ao obter dados:', e);
+        }
+    }
+
+    carregarDados();
+    setInterval(carregarDados, 3000);
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js')
+                .then(() => console.log('PWA Service Worker registado!'))
+                .catch(err => console.error('Erro ao registar Service Worker:', err));
+        });
+    }
+</script>
+</body>
+</html>
