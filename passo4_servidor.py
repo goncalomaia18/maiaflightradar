@@ -32,6 +32,19 @@ def preparar_bd():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS estado_atual (
+            hex TEXT PRIMARY KEY,
+            voo TEXT,
+            lat REAL,
+            lon REAL,
+            altitude TEXT,
+            velocidade REAL,
+            rssi REAL,
+            rumo REAL,
+            data_hora TEXT
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS aeronaves (
             hex TEXT PRIMARY KEY,
             matricula TEXT,
@@ -69,7 +82,7 @@ def enriquecer_novos_avioes(conn):
 
     hex_pendentes = [
         r[0] for r in cursor.execute(
-            "SELECT DISTINCT hex FROM telemetria WHERE hex IS NOT NULL AND hex NOT IN (SELECT hex FROM aeronaves) LIMIT 2"
+            "SELECT DISTINCT hex FROM estado_atual WHERE hex IS NOT NULL AND hex NOT IN (SELECT hex FROM aeronaves) LIMIT 2"
         ).fetchall()
     ]
     for h in hex_pendentes:
@@ -93,7 +106,7 @@ def enriquecer_novos_avioes(conn):
 
     voos_pendentes = [
         r[0] for r in cursor.execute(
-            "SELECT DISTINCT voo FROM telemetria WHERE voo IS NOT NULL AND voo NOT IN (SELECT voo FROM rotas) LIMIT 2"
+            "SELECT DISTINCT voo FROM estado_atual WHERE voo IS NOT NULL AND voo NOT IN (SELECT voo FROM rotas) LIMIT 2"
         ).fetchall()
     ]
     for voo in voos_pendentes:
@@ -111,7 +124,7 @@ def enriquecer_novos_avioes(conn):
 
 
 def recolha_background():
-    """Recolhe dados do radar a cada 3 segundos e grava no radar.db."""
+    """Recolhe dados do radar a cada 3 segundos, guarda histórico e atualiza o mapa ao vivo."""
     while True:
         try:
             req = urllib.request.Request(URL_RADAR, headers=HEADERS)
@@ -122,21 +135,32 @@ def recolha_background():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
 
+            # Limpa o estado anterior para mostrar no mapa apenas o que está agora no ficheiro
+            cursor.execute("DELETE FROM estado_atual")
+
             for aviao in dados.get("aircraft", []):
+                hex_code = aviao.get("hex")
+                voo = (aviao.get("flight") or "").strip() or None
+                lat = aviao.get("lat")
+                lon = aviao.get("lon")
+                altitude = str(aviao.get("altitude", ""))
+                velocidade = aviao.get("speed")
+                rssi = aviao.get("rssi")
+                rumo = aviao.get("track")
+
+                # 1. Guarda no histórico completo (base de dados)
                 cursor.execute("""
                     INSERT INTO telemetria (data_hora, hex, voo, lat, lon, altitude, velocidade, rssi, rumo)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    agora,
-                    aviao.get("hex"),
-                    (aviao.get("flight") or "").strip() or None,
-                    aviao.get("lat"),
-                    aviao.get("lon"),
-                    str(aviao.get("altitude", "")),
-                    aviao.get("speed"),
-                    aviao.get("rssi"),
-                    aviao.get("track"),
-                ))
+                """, (agora, hex_code, voo, lat, lon, altitude, velocidade, rssi, rumo))
+
+                # 2. Guarda no mapa em tempo real apenas se estiver presente agora com coordenadas
+                if hex_code and lat is not None and lon is not None:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO estado_atual (hex, voo, lat, lon, altitude, velocidade, rssi, rumo, data_hora)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (hex_code, voo, lat, lon, altitude, velocidade, rssi, rumo, agora))
+
             conn.commit()
             enriquecer_novos_avioes(conn)
             conn.close()
@@ -161,18 +185,12 @@ class RadarHandler(SimpleHTTPRequestHandler):
             conn = sqlite3.connect(DB_FILE)
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT t.hex, t.voo, t.lat, t.lon, t.altitude, t.velocidade, t.rssi, t.rumo, t.data_hora,
+                SELECT e.hex, e.voo, e.lat, e.lon, e.altitude, e.velocidade, e.rssi, e.rumo, e.data_hora,
                        a.matricula, a.modelo, a.companhia,
                        r.origem, r.destino
-                FROM telemetria t
-                INNER JOIN (
-                    SELECT hex, MAX(id) AS max_id
-                    FROM telemetria
-                    WHERE lat IS NOT NULL AND lon IS NOT NULL
-                    GROUP BY hex
-                ) ult ON t.id = ult.max_id
-                LEFT JOIN aeronaves a ON t.hex = a.hex
-                LEFT JOIN rotas r ON t.voo = r.voo
+                FROM estado_atual e
+                LEFT JOIN aeronaves a ON e.hex = a.hex
+                LEFT JOIN rotas r ON e.voo = r.voo
             """).fetchall()
             conn.close()
             self.responder_json([dict(r) for r in rows])
