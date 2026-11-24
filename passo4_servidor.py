@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import sqlite3
 import threading
 import time
@@ -12,7 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 URL_RADAR = "https://ads-b.jcboliveira.xyz/dump1090/data/aircraft.json"
 DB_FILE = "radar.db"
 PORTA = int(os.environ.get("PORT", 8000))
-HEADERS = {"User-Agent": "MaiaFlightRadar/1.0"}
+HEADERS = {"User-Agent": "STAER-Radar-App/1.0"}
 
 
 def preparar_bd():
@@ -64,9 +63,6 @@ def preparar_bd():
         conn.execute("ALTER TABLE telemetria ADD COLUMN rumo REAL")
     except sqlite3.OperationalError:
         pass
-
-    # Limpa entradas antigas marcadas como 'Desconhecida' para voltar a tentar com as 3 APIs
-    conn.execute("DELETE FROM aeronaves WHERE matricula = 'Desconhecida'")
     conn.commit()
     conn.close()
 
@@ -74,101 +70,43 @@ def preparar_bd():
 def pedir_json(url):
     try:
         req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
 
 
-def extrair_matricula_do_voo(voo):
-    """Deteta se o callsign é na verdade uma matrícula privada (ex: TCAKB -> TC-AKB, CSDXA -> CS-DXA)."""
-    if not voo:
-        return None
-    v = voo.strip().upper()
-    # Padrão de matrícula americana (ex: N128AM)
-    if re.match(r"^N[1-9][0-9A-Z]{1,4}$", v):
-        return v
-    # Padrão de matrícula com prefixo de 2 letras + 3 letras (ex: CS-..., EC-..., TC-..., PH-..., OO-...)
-    if re.match(r"^(CS|CR|EC|TC|PH|OO|HB|OE|EI|SE|OY|LN|OH|SP|OK|HA|YR|LZ|SX|9H)[A-Z]{3}$", v):
-        return f"{v[:2]}-{v[2:]}"
-    # Padrão de 1 letra + 4 letras (ex: D-ABCD, F-ABCD, G-ABCD, I-ABCD)
-    if re.match(r"^[DFGI][A-Z]{4}$", v):
-        return f"{v[0]}-{v[1:]}"
-    return None
-
-
-def consultar_3_apis(hex_code):
-    h = hex_code.lower()
-
-    # 1.ª Fonte: OpenSky Network
-    dados_os = pedir_json(f"https://opensky-network.org/api/metadata/aircraft/icao/{h}")
-    if dados_os and (dados_os.get("registration") or dados_os.get("model")):
-        return (
-            dados_os.get("registration") or None,
-            dados_os.get("model") or dados_os.get("typecode") or "Desconhecido",
-            dados_os.get("operator") or dados_os.get("owner") or "Desconhecida",
-        )
-
-    # 2.ª Fonte: adsbdb.com (excelente cobertura para aviação comercial e executiva)
-    dados_adsb = pedir_json(f"https://api.adsbdb.com/v0/aircraft/{h}")
-    if dados_adsb and isinstance(dados_adsb.get("response"), dict):
-        ac = dados_adsb["response"].get("aircraft")
-        if isinstance(ac, dict) and (ac.get("registration") or ac.get("type")):
-            return (
-                ac.get("registration") or None,
-                ac.get("type") or ac.get("icao_type") or "Desconhecido",
-                ac.get("registered_owner") or "Desconhecida",
-            )
-
-    # 3.ª Fonte: hexdb.io
-    dados_hd = pedir_json(f"https://hexdb.io/api/v1/aircraft/{h}")
-    if dados_hd and (dados_hd.get("Registration") or dados_hd.get("Type")):
-        return (
-            dados_hd.get("Registration") or None,
-            dados_hd.get("Type") or dados_hd.get("ICAOTypeCode") or "Desconhecido",
-            dados_hd.get("RegisteredOwners") or "Desconhecida",
-        )
-
-    return None, "Desconhecido", "Desconhecida"
-
-
 def enriquecer_novos_avioes(conn):
-    """Completa matrícula, modelo e rotas dos aviões ativos em segundo plano."""
+    """Completa matrícula, modelo e rotas de aviões novos em segundo plano."""
     cursor = conn.cursor()
 
-    pendentes = cursor.execute("""
-        SELECT DISTINCT e.hex, e.voo, e.altitude
-        FROM estado_atual e
-        WHERE e.hex IS NOT NULL AND e.hex NOT IN (SELECT hex FROM aeronaves)
-        LIMIT 6
-    """).fetchall()
-
-    for h, voo, altitude in pendentes:
-        matricula, modelo, companhia = consultar_3_apis(h)
-
-        # Fallback 1: Tentar deduzir a matrícula a partir do callsign (voos privados)
-        if not matricula:
-            matricula_voo = extrair_matricula_do_voo(voo)
-            if matricula_voo:
-                matricula = matricula_voo
-                if companhia == "Desconhecida":
-                    companhia = "Aviação Privada / Executiva"
-
-        # Fallback 2: Identificar veículos terrestres de aeroporto
-        if not matricula and altitude == "ground" and not voo:
-            matricula = "Viatura Solo"
-            modelo = "Equipamento Aeroportuário"
-            companhia = "Aeroporto"
+    hex_pendentes = [
+        r[0] for r in cursor.execute(
+            "SELECT DISTINCT hex FROM estado_atual WHERE hex IS NOT NULL AND hex NOT IN (SELECT hex FROM aeronaves) LIMIT 2"
+        ).fetchall()
+    ]
+    for h in hex_pendentes:
+        matricula, modelo, companhia = "Desconhecida", "Desconhecido", "Desconhecida"
+        dados_os = pedir_json(f"https://opensky-network.org/api/metadata/aircraft/icao/{h.lower()}")
+        if dados_os and (dados_os.get("registration") or dados_os.get("model")):
+            matricula = dados_os.get("registration") or "N/A"
+            modelo = dados_os.get("model") or dados_os.get("typecode") or "N/A"
+            companhia = dados_os.get("operator") or dados_os.get("owner") or "N/A"
+        else:
+            dados_hd = pedir_json(f"https://hexdb.io/api/v1/aircraft/{h.lower()}")
+            if dados_hd and (dados_hd.get("Registration") or dados_hd.get("Type")):
+                matricula = dados_hd.get("Registration") or "N/A"
+                modelo = dados_hd.get("Type") or dados_hd.get("ICAOTypeCode") or "N/A"
+                companhia = dados_hd.get("RegisteredOwners") or "N/A"
 
         cursor.execute(
             "INSERT OR REPLACE INTO aeronaves (hex, matricula, modelo, companhia) VALUES (?, ?, ?, ?)",
-            (h, matricula or "Desconhecida", modelo, companhia),
+            (h, matricula, modelo, companhia),
         )
 
-    # Enriquecer rotas (Origem -> Destino)
     voos_pendentes = [
         r[0] for r in cursor.execute(
-            "SELECT DISTINCT voo FROM estado_atual WHERE voo IS NOT NULL AND voo NOT IN (SELECT voo FROM rotas) LIMIT 6"
+            "SELECT DISTINCT voo FROM estado_atual WHERE voo IS NOT NULL AND voo NOT IN (SELECT voo FROM rotas) LIMIT 2"
         ).fetchall()
     ]
     for voo in voos_pendentes:
@@ -177,17 +115,6 @@ def enriquecer_novos_avioes(conn):
         if dados_rota and "route" in dados_rota and "-" in dados_rota["route"]:
             partes = dados_rota["route"].split("-")
             origem, destino = partes[0].strip(), partes[-1].strip()
-        else:
-            # Fallback de rota pela adsbdb
-            dados_adsb_rota = pedir_json(f"https://api.adsbdb.com/v0/callsign/{voo.upper()}")
-            if dados_adsb_rota and isinstance(dados_adsb_rota.get("response"), dict):
-                fr = dados_adsb_rota["response"].get("flightroute")
-                if isinstance(fr, dict):
-                    orig = fr.get("origin") or {}
-                    dest = fr.get("destination") or {}
-                    if orig.get("icao_code") and dest.get("icao_code"):
-                        origem = orig["icao_code"]
-                        destino = dest["icao_code"]
 
         cursor.execute(
             "INSERT OR REPLACE INTO rotas (voo, origem, destino) VALUES (?, ?, ?)",
@@ -208,6 +135,7 @@ def recolha_background():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
 
+            # Limpa o estado anterior para mostrar no mapa apenas o que está agora no ficheiro
             cursor.execute("DELETE FROM estado_atual")
 
             for aviao in dados.get("aircraft", []):
@@ -220,11 +148,13 @@ def recolha_background():
                 rssi = aviao.get("rssi")
                 rumo = aviao.get("track")
 
+                # 1. Guarda no histórico completo (base de dados)
                 cursor.execute("""
                     INSERT INTO telemetria (data_hora, hex, voo, lat, lon, altitude, velocidade, rssi, rumo)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (agora, hex_code, voo, lat, lon, altitude, velocidade, rssi, rumo))
 
+                # 2. Guarda no mapa em tempo real apenas se estiver presente agora com coordenadas
                 if hex_code and lat is not None and lon is not None:
                     cursor.execute("""
                         INSERT OR REPLACE INTO estado_atual (hex, voo, lat, lon, altitude, velocidade, rssi, rumo, data_hora)
